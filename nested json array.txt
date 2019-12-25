@@ -1,0 +1,213 @@
+USE [Sample]
+GO
+
+/****** Object:  Table [dbo].[Invoice]    Script Date: 25/12/2019 17:11:20 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[Invoice](
+	[Id] [int] IDENTITY(1,1) NOT NULL,
+	[CustomerName] [varchar](50) NULL,
+	[Date] [datetime] NULL,
+PRIMARY KEY CLUSTERED 
+(
+	[Id] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON) ON [PRIMARY]
+) ON [PRIMARY]
+
+GO
+
+
+/****** Object:  Table [dbo].[InvoiceDetails]    Script Date: 25/12/2019 17:11:43 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[InvoiceDetails](
+	[Id] [int] IDENTITY(1,1) NOT NULL,
+	[InvoiceId] [int] NULL,
+	[ProductName] [nvarchar](50) NULL,
+	[Qty] [decimal](18, 0) NULL,
+ CONSTRAINT [PK_InvoiceDetails] PRIMARY KEY CLUSTERED 
+(
+	[Id] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON) ON [PRIMARY]
+) ON [PRIMARY]
+
+GO
+
+ALTER TABLE [dbo].[InvoiceDetails]  WITH CHECK ADD  CONSTRAINT [FK_InvoiceDetails_Invoice] FOREIGN KEY([InvoiceId])
+REFERENCES [dbo].[Invoice] ([Id])
+GO
+
+ALTER TABLE [dbo].[InvoiceDetails] CHECK CONSTRAINT [FK_InvoiceDetails_Invoice]
+GO
+
+/****** Object:  Table [dbo].[InvoiceTaxDetails]    Script Date: 25/12/2019 17:12:09 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[InvoiceTaxDetails](
+	[Id] [int] IDENTITY(1,1) NOT NULL,
+	[InvoiceDetailsId] [int] NULL,
+	[TaxName] [nvarchar](50) NULL,
+	[TaxRate] [decimal](18, 0) NULL,
+ CONSTRAINT [PK_InvoiceTaxDetails] PRIMARY KEY CLUSTERED 
+(
+	[Id] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON) ON [PRIMARY]
+) ON [PRIMARY]
+
+GO
+
+ALTER TABLE [dbo].[InvoiceTaxDetails]  WITH CHECK ADD  CONSTRAINT [FK_InvoiceTaxDetails_InvoiceDetails] FOREIGN KEY([InvoiceDetailsId])
+REFERENCES [dbo].[InvoiceDetails] ([Id])
+GO
+
+ALTER TABLE [dbo].[InvoiceTaxDetails] CHECK CONSTRAINT [FK_InvoiceTaxDetails_InvoiceDetails]
+GO
+
+CREATE PROCEDURE [dbo].[SaveInvoice]
+(
+	@InvoiceTable NVARCHAR(MAX),
+	@Message NVARCHAR(MAX) OUTPUT,
+	@Status BIT OUTPUT 
+)
+AS
+BEGIN
+
+	SET @Message = '';
+	SET @Status = 0
+
+	BEGIN TRANSACTION;
+
+	BEGIN TRY
+	
+	INSERT INTO [dbo].[Invoice]([CustomerName],[Date])
+		SELECT [CustomerName],[Date]
+		FROM OPENJSON(@InvoiceTable)
+		WITH (
+			[CustomerName] VARCHAR(50),
+			[Date] DATETIME
+		);
+	
+	DECLARE @InvoiceId INT = SCOPE_IDENTITY();
+
+	DECLARE @InvoiceTaxDetails TABLE(InvoiceDetailsId INT, [InvoiceTaxDetails] NVARCHAR(MAX));
+
+
+	MERGE InvoiceDetails
+	USING (
+		SELECT [ProductName],[Qty], [InvoiceTaxDetails]
+		FROM OPENJSON(@InvoiceTable, '$.InvoiceDetails')
+		WITH (
+			[ProductName] VARCHAR(100),
+			[Qty] VARCHAR(100),
+			[InvoiceTaxDetails] NVARCHAR(MAX) AS JSON
+		)
+	) AS J
+	ON 1 = 0    -- Always INSERT
+	WHEN NOT MATCHED THEN 
+		INSERT([InvoiceId], [ProductName], [Qty])
+		VALUES (@InvoiceId, J.[ProductName], J.[Qty])
+		OUTPUT inserted.Id, J.[InvoiceTaxDetails]
+		INTO @InvoiceTaxDetails([InvoiceDetailsId], [InvoiceTaxDetails]);
+
+
+		INSERT InvoiceTaxDetails([InvoiceDetailsId], [TaxName], [TaxRate])
+			SELECT [InvoiceDetailsId], ITD.[TaxName], ITD.[TaxRate]
+			FROM @InvoiceTaxDetails CROSS APPLY (
+				SELECT  [TaxName], [TaxRate]
+				FROM OPENJSON([InvoiceTaxDetails])
+				WITH (
+					[TaxName] VARCHAR(50),
+					[TaxRate] Decimal
+				)
+      ) AS ITD;
+
+	COMMIT;
+
+	END TRY
+
+	BEGIN CATCH
+		
+		   SELECT  
+            ERROR_NUMBER() AS ErrorNumber  
+            ,ERROR_SEVERITY() AS ErrorSeverity  
+            ,ERROR_STATE() AS ErrorState  
+            ,ERROR_PROCEDURE() AS ErrorProcedure  
+            ,ERROR_LINE() AS ErrorLine  
+            ,ERROR_MESSAGE() AS ErrorMessage;  
+
+		ROLLBACK TRANSACTION;
+		SET @Message = 'Module rights details not saved';
+		SET @Status = 0
+
+	END CATCH
+
+END
+
+
+
+
+
+USE [Sample]
+GO
+
+DECLARE	@return_value int,
+		@Message nvarchar(max),
+		@Status bit
+
+EXEC	@return_value = [dbo].[SaveInvoice]
+		@InvoiceTable = N'{ 
+   "CustomerName":"A",
+   "Date":"2019-12-12",
+   "InvoiceDetails":[ 
+      { 
+         "ProductName":"Product 1",
+         "Qty":"1",
+         "InvoiceTaxDetails":[ 
+            { 
+               "TaxName":"CGST 5%",
+               "TaxRate":"5"
+            },
+            { 
+               "TaxName":"IGST 5%",
+               "TaxRate":"5"
+            }
+         ]
+      },
+      { 
+         "ProductName":"Product 2",
+         "Qty":"10",
+         "InvoiceTaxDetails":[ 
+            { 
+               "TaxName":"CGST 9%",
+               "TaxRate":"9"
+            },
+            { 
+               "TaxName":"IGST 9%",
+               "TaxRate":"9"
+            }
+         ]
+      }
+   ]
+}',
+		@Message = @Message OUTPUT,
+		@Status = @Status OUTPUT
+
+SELECT	@Message as N'@Message',
+		@Status as N'@Status'
+
+SELECT	'Return Value' = @return_value
+
+GO
+
