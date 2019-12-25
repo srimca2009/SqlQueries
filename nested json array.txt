@@ -211,3 +211,28 @@ SELECT	'Return Value' = @return_value
 
 GO
 
+
+
+
+SELECT 
+  [CustomerName] AS 'CustomerName', 
+  [Date] AS 'Date', 
+  (
+    SELECT 
+      [ProductName], 
+      [Qty], 
+      (
+        SELECT 
+          [TaxName], 
+          [TaxRate]
+        FROM InvoiceTaxDetails
+        WHERE InvoiceTaxDetails.InvoiceDetailsId = InvoiceDetails.Id
+        FOR JSON PATH
+      ) AS 'InvoiceTaxDetails'
+    FROM InvoiceDetails
+    WHERE InvoiceDetails.InvoiceId = Invoice.Id
+    FOR JSON PATH
+  ) AS 'InvoiceDetails'
+FROM Invoice
+FOR JSON PATH;
+
